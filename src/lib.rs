@@ -1,6 +1,10 @@
+use std::ffi::CString;
+
 use dam::simulation::{Executed, InitializationOptionsBuilder, Initialized, ProgramBuilder};
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::{PyCapsule, PyDict, PyTuple};
+use pyo3::{exceptions::PyRuntimeError, types::PyList};
+use stream::{HopStream, StreamEnum};
 
 mod stream;
 
@@ -75,12 +79,50 @@ impl Program {
         }
     }
 
-    #[pyo3(signature = (run_inference=false))]
-    fn initialize(&mut self, run_inference: bool) -> PyResult<()> {
-        self.state.initialize(run_inference)
+    /// Returns {
+    ///     cycles: u64,
+    ///     results: List<List<values>>
+    /// }
+    #[pyo3(signature = (outputs, *, run_inference=false))]
+    fn run<'a>(&'a mut self, outputs: &'a PyList, run_inference: bool) -> PyResult<&'a PyDict> {
+        // stage all of the outputs
+        let mut values = vec![];
+        for output in outputs.into_iter() {
+            let val: &PyCell<HopStream> = output.downcast()?;
+            if let ProgramState::Building(builder) = &mut self.state {
+                values.push(val.borrow_mut().stream.into_list(builder))
+            } else {
+                return Err(PyRuntimeError::new_err(
+                    "Cannot run a program that is not in the Builder state",
+                ));
+            }
+        }
+
+        self.state.initialize(run_inference)?;
+        let cycles = self.state.run()?;
+        let collected: Vec<_> = values
+            .into_iter()
+            .map(|vals| (vals)(outputs.py()))
+            .collect();
+        let result = PyDict::new(outputs.py());
+        result.set_item("cycles", cycles)?;
+        result.set_item("outputs", collected.into_py(outputs.py()))?;
+        Ok(result)
     }
 
-    fn run(&mut self) -> PyResult<u64> {
-        self.state.run()
+    fn constant<'a>(&mut self, values: &'a PyAny) -> PyResult<&'a PyCell<HopStream>> {
+        if let ProgramState::Building(build) = &mut self.state {
+            if let Some(stream) = StreamEnum::from_constant(build, values) {
+                Ok(PyCell::new(values.py(), HopStream { stream })?)
+            } else {
+                Err(PyRuntimeError::new_err(
+                    "Did not know how to properly parse the input values",
+                ))
+            }
+        } else {
+            Err(PyRuntimeError::new_err(
+                "Attempted to add a constant to a program that is not in the building state.",
+            ))
+        }
     }
 }
