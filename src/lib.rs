@@ -1,11 +1,10 @@
-use std::ffi::CString;
-
 use dam::simulation::{Executed, InitializationOptionsBuilder, Initialized, ProgramBuilder};
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDict, PyTuple};
+use pyo3::types::PyDict;
 use pyo3::{exceptions::PyRuntimeError, types::PyList};
 use stream::{HopStream, StreamEnum};
 
+mod elem_wrapper;
 mod stream;
 
 /// Formats the sum of two numbers as string.
